@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>weehog.ai — macOS Kernel &amp; Filesystem Security Research</title>
+  <meta name="description" content="A quiet, solo security research notebook by Charles Stevenson focused on macOS kernel memory safety, filesystem edge cases, and low-level internals.">
+  <meta name="author" content="Charles Stevenson">
+  <link rel="canonical" href="https://weehog.ai/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="me" href="https://github.com/brucesdad13">
+  <link rel="me" href="https://www.linkedin.com/in/charliestevenson/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="weehog.ai">
+  <meta property="og:title" content="weehog.ai 🍏🦔 — macOS Kernel &amp; Filesystem Security Research">
+  <meta property="og:description" content="Small footprint. Sharp focus on macOS kernel &amp; filesystem internals.">
+  <meta property="og:url" content="https://weehog.ai/">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    "name": "Charles Stevenson",
+    "alternateName": "brucesdad13",
+    "url": "https://weehog.ai",
+    "knowsAbout": [
+      "macOS kernel memory safety",
+      "XNU internals",
+      "Filesystem security",
+      "Low-level vulnerability research"
+    ],
+    "sameAs": [
+      "https://github.com/brucesdad13",
+      "https://www.linkedin.com/in/charliestevenson/"
+    ]
+  }
+  </script>
+
+  <style>
+    :root {
+      --bg: #fafaf7;
+      --surface: #f2f4ef;
+      --surface-subtle: #ebeee7;
+      --ink: #131814;
+      --ink-secondary: #465148;
+      --ink-muted: #657168;
+      --border: #d9dfd6;
+      --border-strong: #bfc9bc;
+      --accent: #27801a;
+      --accent-bright: #44b72e;
+      --accent-tint: #e6f4e2;
+      --accent-border: #b7ddb0;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", Consolas, monospace;
+
+      /* Inline SVG emblem tokens */
+      --svg-stem: #594330;
+      --svg-apple: #44b72e;
+      --svg-apple-stroke: #247317;
+      --svg-apple-shade: #369e23;
+      --svg-leaf: #67d649;
+      --svg-f1: #232c27;
+      --svg-f2: #34423a;
+      --svg-f3: #1b231f;
+      --svg-f4: #39483f;
+      --svg-f5: #28332d;
+      --svg-rim: #151b18;
+      --svg-feet: #232c27;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0c0f0d;
+        --surface: #131815;
+        --surface-subtle: #181f1b;
+        --ink: #ecf1ed;
+        --ink-secondary: #a1aea4;
+        --ink-muted: #7b897e;
+        --border: #232c26;
+        --border-strong: #324037;
+        --accent: #6ce057;
+        --accent-bright: #56cf3f;
+        --accent-tint: #152416;
+        --accent-border: #284b29;
+
+        --svg-stem: #9e856d;
+        --svg-apple: #4ec936;
+        --svg-apple-stroke: #2c8a1d;
+        --svg-apple-shade: #3eb028;
+        --svg-leaf: #74e055;
+        --svg-f1: #2a352f;
+        --svg-f2: #3d4d44;
+        --svg-f3: #222b26;
+        --svg-f4: #45574d;
+        --svg-f5: #313e37;
+        --svg-rim: #7b9182;
+        --svg-feet: #8ca193;
+      }
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-rendering: optimizeLegibility;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 1rem;
+      line-height: 1.65;
+      display: flex;
+      flex-direction: column;
+      border-top: 3px solid var(--accent-bright);
+    }
+
+    .wrap {
+      width: 100%;
+      max-width: 44rem;
+      margin: 0 auto;
+      padding: 3.5rem 1.5rem 3rem;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.2em;
+      transition: color 0.12s ease, text-decoration-color 0.12s ease;
+    }
+
+    a:hover {
+      color: var(--ink);
+      text-decoration-color: var(--accent-bright);
+    }
+
+    a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 3px;
+    }
+
+    /* Masthead */
+    header {
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.35rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .emblem-frame {
+      width: 3rem;
+      height: 3rem;
+      border-radius: 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .emblem-frame svg {
+      width: 2.25rem;
+      height: 2.25rem;
+      display: block;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 1.45rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .motif {
+      font-family: var(--sans);
+      font-size: 1.15rem;
+      font-weight: 400;
+      letter-spacing: 0.04em;
+    }
+
+    .coord {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--ink-muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 0.22rem 0.6rem;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    .tagline {
+      margin: 0 0 0.85rem;
+      font-size: 1.22rem;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      line-height: 1.38;
+      color: var(--ink);
+    }
+
+    .bio {
+      margin: 0;
+      color: var(--ink-secondary);
+      font-size: 1rem;
+      max-width: 62ch;
+    }
+
+    /* Research Focus Strip */
+    .scope-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin: 1.75rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .scope-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.6rem;
+      padding: 0.85rem 0.95rem;
+    }
+
+    .scope-label {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.73rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+      margin-bottom: 0.3rem;
+    }
+
+    .scope-desc {
+      margin: 0;
+      font-size: 0.86rem;
+      line-height: 1.45;
+      color: var(--ink-secondary);
+    }
+
+    /* Curated Findings Section */
+    main {
+      padding: 2.25rem 0;
+      flex: 1;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    h2 {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.86rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink);
+    }
+
+    .section-note {
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      color: var(--ink-muted);
+    }
+
+    .findings-empty {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-bright);
+      border-radius: 0.6rem;
+      padding: 1.25rem 1.35rem;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--accent-tint);
+      border: 1px solid var(--accent-border);
+      border-radius: 999px;
+      padding: 0.16rem 0.6rem;
+      margin-bottom: 0.7rem;
+    }
+
+    .status-dot {
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: 50%;
+      background: var(--accent-bright);
+      display: inline-block;
+    }
+
+    .findings-empty p {
+      margin: 0 0 0.75rem;
+      color: var(--ink-secondary);
+      font-size: 0.95rem;
+    }
+
+    .findings-empty p:last-child {
+      margin-bottom: 0;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+    }
+
+    /* Pre-styled finding cards for future cleared disclosures */
+    .finding-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .finding-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.6rem;
+      padding: 1.1rem 1.25rem;
+      transition: border-color 0.12s ease;
+    }
+
+    .finding-item:hover {
+      border-color: var(--border-strong);
+    }
+
+    .finding-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      color: var(--ink-muted);
+      margin-bottom: 0.4rem;
+    }
+
+    .badge {
+      color: var(--accent);
+      background: var(--accent-tint);
+      border: 1px solid var(--accent-border);
+      border-radius: 0.3rem;
+      padding: 0.08rem 0.45rem;
+      font-weight: 600;
+    }
+
+    .subsystem {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 0.3rem;
+      padding: 0.08rem 0.45rem;
+      color: var(--ink-secondary);
+    }
+
+    .finding-title {
+      margin: 0 0 0.35rem;
+      font-size: 1.02rem;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .finding-title a {
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .finding-title a:hover {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    .finding-summary {
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--ink-secondary);
+    }
+
+    /* Footer & Entity Graph Links */
+    footer {
+      padding-top: 1.65rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 0.95rem;
+    }
+
+    .epigraph {
+      margin: 0;
+      font-size: 0.86rem;
+      font-style: italic;
+      color: var(--ink-muted);
+    }
+
+    .epigraph span {
+      font-style: normal;
+    }
+
+    .colophon {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      font-size: 0.88rem;
+      color: var(--ink-secondary);
+    }
+
+    .operator {
+      font-weight: 500;
+      color: var(--ink);
+    }
+
+    .operator-handle {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      font-weight: 400;
+      color: var(--ink-muted);
+    }
+
+    .entity-links {
+      display: flex;
+      align-items: center;
+      gap: 1.15rem;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 0.83rem;
+    }
+
+    @media (max-width: 620px) {
+      .wrap {
+        padding: 2.25rem 1.15rem 2rem;
+      }
+
+      .scope-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .tagline {
+        font-size: 1.1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand-row">
+        <div class="brand">
+          <span class="emblem-frame" aria-hidden="true">
+            <svg viewBox="0 0 64 64" focusable="false">
+              <defs>
+                <mask id="hdr-apple-cut">
+                  <rect width="64" height="64" fill="#fff"/>
+                  <path d="M25 55 L22 46.5 L27.5 45 L26 37 L32 39 L34 31.5 L39 36.5 L43 32 L45.5 37.5 L50 35 L48.5 41.5 L59.5 50 L46 55 Z"
+                        fill="#000" stroke="#000" stroke-width="5.5" stroke-linejoin="round"/>
+                </mask>
+              </defs>
+              <g mask="url(#hdr-apple-cut)">
+                <path d="M25.5 16.5 C25.5 11.5 27.5 8 30.8 5.8" fill="none" stroke="var(--svg-stem)" stroke-width="2.6" stroke-linecap="round"/>
+                <path d="M25.5 17.5 C21 13 11.8 13.2 7.8 21.5 C3.8 30 6.5 43.5 15 50.5 C19 53.8 22.8 53 25.5 50.8 C28.2 53 32 53.8 36 50.5 C44.5 43.5 47.2 30 43.2 21.5 C39.2 13.2 30 13 25.5 17.5 Z"
+                      fill="var(--svg-apple)" stroke="var(--svg-apple-stroke)" stroke-width="1.8" stroke-linejoin="round"/>
+                <path d="M25.5 18.4 C29.6 14.3 38.2 14.5 42 22 C45.5 29.5 43.2 42.2 35.4 49.2 C31.8 52.2 28.4 51.6 25.5 49.6 C31 46 34.5 34 25.5 18.4 Z"
+                      fill="var(--svg-apple-shade)" opacity="0.45"/>
+                <path d="M13.5 23.5 C11.2 28.5 11.8 35 14.5 40" fill="none" stroke="#ffffff" stroke-opacity="0.58" stroke-width="2.5" stroke-linecap="round"/>
+                <path d="M27.2 12.6 C31.2 6.5 40.5 6.5 42.6 12 C37.6 16 31 15.8 27.2 12.6 Z"
+                      fill="var(--svg-leaf)" stroke="var(--svg-apple-stroke)" stroke-width="1.6" stroke-linejoin="round"/>
+              </g>
+              <g stroke-linejoin="round">
+                <polygon points="25,55 22,46.5 27.5,45 37,55" fill="var(--svg-f1)"/>
+                <polygon points="37,55 27.5,45 26,37 32,39" fill="var(--svg-f2)"/>
+                <polygon points="37,55 32,39 34,31.5 39,36.5" fill="var(--svg-f3)"/>
+                <polygon points="37,55 39,36.5 43,32 45.5,37.5" fill="var(--svg-f4)"/>
+                <polygon points="37,55 45.5,37.5 50,35 48.5,41.5 45,48.5 46,55" fill="var(--svg-f5)"/>
+                <path d="M25 55 L22 46.5 L27.5 45 L26 37 L32 39 L34 31.5 L39 36.5 L43 32 L45.5 37.5 L50 35 L48.5 41.5 L45 48.5 L46 55 Z"
+                      fill="none" stroke="var(--svg-rim)" stroke-width="1.3"/>
+                <polygon points="48.5,41.5 59.5,50 45,48.5" fill="#ead0aa"/>
+                <polygon points="45,48.5 59.5,50 46,55" fill="#d4b183"/>
+                <path d="M48.5 41.5 L59.5 50 L46 55" fill="none" stroke="var(--svg-rim)" stroke-width="1.3" stroke-linecap="round"/>
+                <circle cx="45.5" cy="42.5" r="2.1" fill="var(--svg-f4)" stroke="var(--svg-rim)" stroke-width="1.2"/>
+                <circle cx="51.2" cy="46.8" r="1.5" fill="#141916"/>
+                <circle cx="59.2" cy="50" r="2" fill="#141916"/>
+                <path d="M31 55.3 L31 57.8 M42.5 55.3 L42.5 57.8" fill="none" stroke="var(--svg-feet)" stroke-width="2.2" stroke-linecap="round"/>
+              </g>
+            </svg>
+          </span>
+          <h1>weehog.ai <span class="motif" aria-label="green apple and hedgehog">🍏🦔</span></h1>
+        </div>
+        <span class="coord">arm64e · xnu · vfs</span>
+      </div>
+
+      <p class="tagline">Small footprint. Sharp focus on macOS kernel &amp; filesystem internals.</p>
+      <p class="bio">A quiet, solo security research notebook focused on macOS kernel memory safety, filesystem edge cases, and low-level internals. Small by design—curled around one hard problem at a time, documented without noise.</p>
+
+      <ul class="scope-grid" aria-label="Research focus areas">
+        <li class="scope-card">
+          <span class="scope-label">Memory Safety</span>
+          <p class="scope-desc">XNU zone allocator, Mach IPC lifetimes, and arm64e pointer &amp; bounds invariants.</p>
+        </li>
+        <li class="scope-card">
+          <span class="scope-label">Filesystems</span>
+          <p class="scope-desc">VFS vnode state transitions, mount/unmount races, and on-disk parser edge cases.</p>
+        </li>
+        <li class="scope-card">
+          <span class="scope-label">Internals</span>
+          <p class="scope-desc">IOKit userclient surfaces, coprocessor boundaries, and minimal hardware-verified reproducers.</p>
+        </li>
+      </ul>
+    </header>
+
+    <main>
+      <section aria-labelledby="findings-heading">
+        <div class="section-head">
+          <h2 id="findings-heading">Curated Findings</h2>
+          <span class="section-note">Single source of truth → GitHub</span>
+        </div>
+
+        <!-- BEGIN CURATED FINDINGS -->
+        <!-- Guardrail: Only add entries cleared for public disclosure with live public GitHub URLs. See AGENTS.md. -->
+        <div class="findings-empty" role="status">
+          <span class="status-pill"><span class="status-dot" aria-hidden="true"></span> Coordinated disclosure gate active</span>
+          <p>Cleared macOS advisories, root-cause write-ups, and minimal reproducers are indexed here only after vendor patches ship. This page never mirrors drafts—every entry routes directly to its canonical repository or advisory on GitHub.</p>
+          <p><a href="https://github.com/brucesdad13">View public repositories &amp; historical vulnerability research on GitHub →</a></p>
+        </div>
+
+        <template id="finding-entry-template">
+          <ul class="finding-list">
+            <li class="finding-item">
+              <div class="finding-meta">
+                <time datetime="2026-01">2026-01</time>
+                <span class="badge">CVE-YYYY-NNNNN</span>
+                <span class="subsystem">XNU / VFS</span>
+              </div>
+              <h3 class="finding-title">
+                <a href="https://github.com/brucesdad13/REPO_OR_ADVISORY">Concise public advisory title ↗</a>
+              </h3>
+              <p class="finding-summary">Brief post-patch summary of the root cause and affected macOS release, linking strictly to the public GitHub write-up.</p>
+            </li>
+          </ul>
+        </template>
+        <!-- END CURATED FINDINGS -->
+      </section>
+    </main>
+
+    <footer>
+      <p class="epigraph">“The fox knows many things, but the hedgehog knows one big thing.” <span>— Archilochus</span></p>
+      <div class="colophon">
+        <div class="operator">
+          Charles Stevenson <span class="operator-handle">@brucesdad13</span>
+        </div>
+        <nav class="entity-links" aria-label="Identity and canonical profiles">
+          <a href="https://github.com/brucesdad13" rel="me">GitHub</a>
+          <a href="https://www.linkedin.com/in/charliestevenson/" rel="me">LinkedIn</a>
+          <!-- Optional: uncomment once Cloudflare Email Routing is active on weehog.ai
+          <a href="mailto:security@weehog.ai">security@weehog.ai</a>
+          -->
+        </nav>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

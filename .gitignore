@@ -1,0 +1,26 @@
+# OS & editor clutter
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+__pycache__/
+*.pyc
+
+# Defensive blocklist: never track research notes, crash logs, or reproducers
+*.ips
+*.panic
+*.crash
+*.spin
+*.diag
+*.dSYM/
+*.pcap
+*.pcapng
+*.bin
+*.core
+*.env
+*.env.*
+private/
+drafts/
+notes/
+repro/
